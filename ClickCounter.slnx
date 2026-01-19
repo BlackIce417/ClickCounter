@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="ClickCounter/ClickCounter.vcxproj" Id="a600aef6-7044-4ecb-a765-d06d275120e5" />
+</Solution>
