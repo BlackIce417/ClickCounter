@@ -4,8 +4,11 @@
 #include <process.h>
 #include <atomic>
 #include <conio.h>
-#include "resource.h"
+#include <shlwapi.h>
+#include <ctime>
 
+#include "resource.h"
+#pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "user32.lib")
 
 #define WM_TRAYICON (WM_USER + 1)
@@ -22,7 +25,58 @@ long long g_wheelTotal = 0;
 double g_totalMove = 0.0;
 POINT g_lastPos = { 0, 0 };
 bool g_firstMove = true;
-HWND g_dlg = nullptr;
+HWND g_hDlg = nullptr;
+CHAR g_path[MAX_PATH] = { 0 };
+
+
+BOOL GetCurrentPath(_Out_ CHAR* szPath) {
+    if (szPath == nullptr) {
+        return FALSE;
+    }
+    GetModuleFileNameA(NULL, szPath, MAX_PATH);
+    CHAR* p = strrchr(szPath, '\\');
+    if (p) {
+        *(p + 1) = '\0';
+	}
+	return TRUE;
+}
+
+void GetFormatTime(WCHAR* outStr, size_t size) {
+    time_t now = time(0);
+    struct tm ltm;
+    localtime_s(&ltm, &now);
+
+    swprintf_s(outStr, size, L"%04d/%02d/%02d %02d:%02d",
+        ltm.tm_year + 1900,  
+        ltm.tm_mon + 1,      
+        ltm.tm_mday,
+        ltm.tm_hour,
+        ltm.tm_min);
+}
+
+VOID ExportData() {
+
+    CHAR pszSavePath[MAX_PATH] = { 0 };
+    GetCurrentPath(pszSavePath);
+    PathAppendA(pszSavePath, "Export.txt");
+
+    WCHAR pTimeBuf[64] = { 0 };
+    GetFormatTime(pTimeBuf, 64);
+
+    WCHAR content[256];
+    swprintf_s(content, L"鼠标统计报告\n导出时间: %s\n----------\n左键: %lld\n右键: %lld\n中键: %lld\n距离: %.2f px",
+        pTimeBuf, g_leftClick, g_rightClick, g_middleClick, g_totalMove);
+
+    FILE* fp = nullptr;
+    fopen_s(&fp, pszSavePath, "w, ccs=UTF-8");
+    if (fp) {
+        fwprintf(fp, L"%s", content);
+        fclose(fp);
+        WCHAR wbuf[256] = { 0 };
+        swprintf_s(wbuf, L"导出成功，文件保存至：%S", pszSavePath);
+        MessageBox(g_hDlg, wbuf, L"提示", MB_OK | MB_ICONINFORMATION);
+    }
+}
 
 INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -34,21 +88,31 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         if (wParam == 1) {
             // 将全局变量格式化并更新到对话框的 Static Text 控件上
-            SetDlgItemInt(hDlg, IDC_LCLICK_COUNT, (UINT)g_leftClick, FALSE);
-            SetDlgItemInt(hDlg, IDC_RCLICK_COUNT, (UINT)g_rightClick, FALSE);
+            SetDlgItemInt(hDlg, IDC_LCLICK_VAL, (UINT)g_leftClick, FALSE);
+            SetDlgItemInt(hDlg, IDC_RCLICK_VAL, (UINT)g_rightClick, FALSE);
+			SetDlgItemInt(hDlg, IDC_MCLICK_VAL, (UINT)g_middleClick, FALSE);
 
             WCHAR distBuf[64];
-            swprintf_s(distBuf, L"%.2f px", g_totalMove);
-            SetDlgItemText(hDlg, IDC_DISTANCE, distBuf);
+            double meters = g_totalMove * 0.00026;
+            if (meters < 1.0) {
+                swprintf_s(distBuf, L"%.0f px", g_totalMove);
+            }
+            else {
+                swprintf_s(distBuf, L"%.2f m", meters); 
+            }
+            SetDlgItemText(hDlg, IDC_MOUSEMOVE_VAL, distBuf);
         }
         break;
 
     case WM_COMMAND:
-        if (LOWORD(wParam) == IDCANCEL) { // 点击关闭按钮
+        if (LOWORD(wParam) == IDCANCEL) {
             KillTimer(hDlg, 1);
             DestroyWindow(hDlg);
             g_hDlg = NULL;
             return (INT_PTR)TRUE;
+        }
+        else if (LOWORD(wParam) == IDC_EXPORT) {
+            ExportData();
         }
         break;
     }
@@ -141,6 +205,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (id == 1) PostQuitMessage(0);
             DestroyMenu(hMenu);
         }
+        else if (lParam == WM_LBUTTONUP) {
+            if (g_hDlg == nullptr || !IsWindow(g_hDlg)) {
+                g_hDlg = CreateDialog(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_DIALOG), hwnd, StatsDlgProc);
+                ShowWindow(g_hDlg, SW_SHOW);
+                SetForegroundWindow(g_hDlg);
+            }
+            else {
+                if (IsWindowVisible(g_hDlg)) {
+                    ShowWindow(g_hDlg, SW_HIDE);
+                }
+                else {
+                    ShowWindow(g_hDlg, SW_SHOW);
+                    SetForegroundWindow(g_hDlg);
+                }
+            }
+        }
     }
     return DefWindowProc(hwnd, message, wParam, lParam);
 }
@@ -177,9 +257,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
-        if (msg.message == WM_QUIT) break;
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        //if (msg.message == WM_QUIT) break;
+        if (g_hDlg == NULL || !IsDialogMessage(g_hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
     }
 
     if (g_mouseHook) {
